@@ -4,8 +4,5 @@ return {
   event = { "InsertLeave", "TextChanged" }, -- optional for lazy loading
   opts = {
     -- your configuration goes here, or leave empty for defaults
-    execution_message = {
-      enabled = false, -- uncomment to disable saving notifications
-    },
   },
 }
