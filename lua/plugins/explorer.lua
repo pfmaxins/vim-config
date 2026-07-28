@@ -35,7 +35,7 @@ end
 
 local function setup_multirepo()
   local ok, Git = pcall(require, "snacks.explorer.git")
-  if not ok or type(Git.update) ~= "function" or type(Git.update) ~= "function" then
+  if not ok or type(Git.update) ~= "function" then
     return
   end
 
@@ -132,7 +132,7 @@ local function setup_multirepo()
     end)
   end
 
-  -- Patch Git.update for multi-repo
+  -- Patch Git.update for multi-repo – NO call to original update
   local original_update = Git.update
   function Git.update(cwd, opts)
     opts = opts or {}
@@ -145,6 +145,7 @@ local function setup_multirepo()
     local root_list = vim.tbl_keys(roots)
 
     if #root_list == 0 then
+      -- Fall back to original single‑repo behaviour
       return original_update(cwd, opts)
     end
 
@@ -158,6 +159,7 @@ local function setup_multirepo()
         return
       end
 
+      -- Merge all sub‑repo results
       local merged = {}
       for _, results in pairs(all_results) do
         for _, r in ipairs(results) do
@@ -165,7 +167,15 @@ local function setup_multirepo()
         end
       end
 
-      original_update(cwd, merged)
+      -- Directly update the git state for the main cwd,
+      -- exactly as the original would have done for a single repo.
+      Git.state[cwd] = Git.state[cwd] or {}
+      local state = Git.state[cwd]
+      state.status = merged
+      state.last = now
+      state.tick = (state.tick or 0) + 1
+
+      -- Fire the user callback (explorer uses this to re‑render)
       if opts.on_update then
         vim.schedule(opts.on_update)
       end
@@ -189,7 +199,7 @@ local function setup_multirepo()
     end
   end
 
-  -- Patch Git.refresh for multi-repo
+  -- Patch Git.refresh – keep it straightforward
   local original_refresh = Git.refresh
   Git.refresh = function(path)
     original_refresh(path)
@@ -202,7 +212,7 @@ local function setup_multirepo()
     git_root_cache = {}
   end
 
-  -- Patch picker actions to use file's git root
+  -- Patch picker actions (unchanged, still correct)
   local Actions = require("snacks.picker.actions")
   local function with_git_root(original_fn)
     return function(picker, ...)
@@ -225,16 +235,21 @@ local function setup_multirepo()
     Actions.git_checkout = with_git_root(Actions.git_checkout)
   end
 
-  -- Patch Snacks.picker.pick to auto-inject git root for git sources
+  -- Patch Picker.pick / LazyGit.open (unchanged)
   local Picker = require("snacks.picker")
   local original_pick = Picker.pick
-  local git_sources =
-    { git_status = true, git_log = true, git_diff = true, git_branches = true, git_stash = true, git_files = true }
+  local git_sources = {
+    git_status = true,
+    git_log = true,
+    git_diff = true,
+    git_branches = true,
+    git_stash = true,
+    git_files = true,
+  }
 
   Picker.pick = function(source, opts)
     if type(source) == "string" and git_sources[source] then
       opts = opts or {}
-      -- Always use context git root if available (overrides LazyVim's default)
       local context_root = get_context_git_root()
       if context_root then
         opts.cwd = context_root
@@ -243,12 +258,10 @@ local function setup_multirepo()
     return original_pick(source, opts)
   end
 
-  -- Patch Snacks.lazygit.open to auto-inject git root
   local LazyGit = require("snacks.lazygit")
   local original_lazygit_open = LazyGit.open
   LazyGit.open = function(opts)
     opts = opts or {}
-    -- Always use context git root if available (overrides LazyVim's default)
     local context_root = get_context_git_root()
     if context_root then
       opts.cwd = context_root
